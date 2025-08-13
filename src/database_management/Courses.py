@@ -160,14 +160,18 @@ def insert_courses_professors(file, db_path):
             with get_db_session(db_path) as session:
                 # Check if Courses table exists by querying it
                 session.execute(text("SELECT 1 FROM Courses LIMIT 1"))
-    except Exception:
+    except Exception as e:
         # If table doesn't exist, create all tables
-        logger.info("Courses table not found, creating tables...")
+        logger.info(f"Courses table not found, creating tables... Error: {e}")
         if is_postgresql() and org_name:
             create_tables(get_organization_database_url(), org_name)
         else:
             create_tables(db_path)
         logger.info("Tables created successfully")
+        
+        # After creating tables, re-run schema check to ensure everything is consistent
+        logger.info("Re-running schema check after table creation...")
+        ensure_database_schema_is_current(db_path)
 
     # Determine which session to use
     if is_postgresql() and org_name:

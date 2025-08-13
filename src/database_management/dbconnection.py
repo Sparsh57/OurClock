@@ -155,7 +155,8 @@ def create_schema_if_not_exists(engine, schema_name: str):
     :param schema_name: Name of the schema to create
     """
     if schema_name and is_postgresql():
-        with engine.connect() as conn:
+        # Use autocommit for DDL operations
+        with engine.connect().execution_options(autocommit=True) as conn:
             # Check if schema exists
             result = conn.execute(text(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name = :schema_name"
@@ -164,7 +165,6 @@ def create_schema_if_not_exists(engine, schema_name: str):
             if not result.fetchone():
                 # Create schema
                 conn.execute(text(f"CREATE SCHEMA {schema_name}"))
-                conn.commit()
                 logger.info(f"Created schema: {schema_name}")
 
 
@@ -195,7 +195,13 @@ def create_tables(db_path_or_url: str, org_name: str = None):
                 for table in Base.metadata.tables.values():
                     table.to_metadata(schema_metadata, schema=schema_name)
                 
-                schema_metadata.create_all(engine)
+                # Use autocommit for DDL operations to ensure tables are committed
+                with engine.connect().execution_options(autocommit=True) as conn:
+                    # Set search path
+                    conn.execute(text(f"SET search_path TO {schema_name}, public"))
+                    # Create all tables using the connection
+                    schema_metadata.create_all(conn)
+                
                 logger.info(f"Created tables for organization: {org_name} in schema: {schema_name}")
                 break
             except Exception as e:

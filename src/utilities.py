@@ -22,9 +22,8 @@ def create_course_dictionary(student_course_map, course_professor_map, professor
     unique_courses = set().union(*student_course_map.values())
     course_availability = {}
 
-    # You can also define excluded slots if needed, or pass them as an extra parameter.
-    excluded_slots = {'Wednesday 14:30', 'Tuesday 14:30'}
-
+    # You can also define excluded slots i f needed, or pass them as an extra parameter.
+    excluded_slots = []
     for course in unique_courses:
         professors = course_professor_map.get(course, [])
         

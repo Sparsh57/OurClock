@@ -164,7 +164,7 @@ const selectedFiles = {
    */
   function renderMappingUI(fileType, extraCols, missingCols) {
     const mappingElem = document.getElementById(fileType + "Mapping");
-    mappingElem.innerHTML = "";
+    mappingElem.innerHTML = '';
   
     // Map fileType to key used for final submission
     const keyMap = {
@@ -174,65 +174,61 @@ const selectedFiles = {
     };
     const fileKey = keyMap[fileType];
   
-    // Clear any old mapping
+    // Reset mapping for this file
     columnMappings[fileKey] = {};
   
-    // Display missing columns info
-    if (missingCols.length > 0) {
-      const p = document.createElement("p");
-      p.innerText = "Missing columns: " + missingCols.join(", ");
+    // Display missing columns
+    if (missingCols.length) {
+      const p = document.createElement('p');
+      p.textContent = 'Missing columns: ' + missingCols.join(', ');
       mappingElem.appendChild(p);
     }
   
-    // If extra columns exist, create dropdowns for mapping
-    if (extraCols.length > 0) {
-      const p = document.createElement("p");
-      p.innerText = "Extra columns detected:";
-      mappingElem.appendChild(p);
+    // If extra columns exist, build mapping controls
+    if (extraCols.length) {
+      const info = document.createElement('p');
+      info.textContent = 'Map these extra columns to expected names:';
+      mappingElem.appendChild(info);
   
-      // Expected columns for each file type
-      const PREVIEW_COLUMNS = {
-        "courses": ["Course code", "Faculty Name", "Type","Classes Per Week", "Number of Sections"],
-        "students":  ["Roll No.", "G CODE", "Sections"],
-        "faculty": ["Name", "Busy Slot"]
+      // Expected column lists
+      const expectedMap = {
+        courses: ["Course code", "Faculty Name", "Type", "Classes Per Week", "Number of Sections"],
+        faculty: ["Name", "Busy Slot"],
+        students: ["Roll No.", "G CODE", "Sections"]
       };
-      const expected_cols = PREVIEW_COLUMNS.get(fileType, []);
   
       extraCols.forEach(col => {
-        const label = document.createElement("label");
-        label.innerText = `Map "${col}" → `;
-        const select = document.createElement("select");
-        // Add browser-default class to ensure the dropdown is visible
-        select.classList.add("browser-default");
-        select.id = fileType + "_" + col;
+        const label = document.createElement('label');
+        label.textContent = `"${col}" → `;
+        const select = document.createElement('select');
+        select.classList.add('browser-default');
+        select.dataset.originalCol = col;  // store original name
   
-        const defaultOpt = document.createElement("option");
-        defaultOpt.value = "";
-        defaultOpt.innerText = "Select expected column";
-        select.appendChild(defaultOpt);
+        const emptyOpt = document.createElement('option');
+        emptyOpt.value = '';
+        emptyOpt.textContent = '-- select column --';
+        select.appendChild(emptyOpt);
   
-        expected_cols.forEach(ec => {
-          const opt = document.createElement("option");
-          opt.value = ec;
-          opt.innerText = ec;
+        expectedMap[fileType].forEach(expected => {
+          const opt = document.createElement('option');
+          opt.value = expected;
+          opt.textContent = expected;
           select.appendChild(opt);
         });
   
         mappingElem.appendChild(label);
         mappingElem.appendChild(select);
-        mappingElem.appendChild(document.createElement("br"));
+        mappingElem.appendChild(document.createElement('br'));
       });
   
-      // Add Confirm Mapping button
-      const confirmBtn = document.createElement("button");
-      confirmBtn.classList.add("btn");
-      confirmBtn.innerText = `Confirm Mapping for ${fileType}`;
-      confirmBtn.onclick = () => confirmMapping(fileType, extraCols);
-      mappingElem.appendChild(confirmBtn);
-    } else {
-      if (missingCols.length === 0) {
-        mappingElem.innerText = "No column mapping needed. Everything matches!";
-      }
+      // Confirm button
+      const btn = document.createElement('button');
+      btn.classList.add('btn');
+      btn.textContent = `Apply mapping for ${fileType}`;
+      btn.addEventListener('click', () => confirmMapping(fileType));
+      mappingElem.appendChild(btn);
+    } else if (!missingCols.length) {
+      mappingElem.textContent = 'All columns match expected names.';
     }
   }
   
