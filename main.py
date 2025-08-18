@@ -1004,16 +1004,23 @@ async def download_conflicts_csv(request: Request):
         if isinstance(schedule_data, list):
             # Convert list data to DataFrame with proper columns
             if schedule_data and len(schedule_data[0]) >= 2:
-                # Assuming format: [day, start_time, end_time, course_name, ...]
+                # Assuming format: [day, start_time, end_time, courses_str, ...]
+                # where courses_str contains multiple courses separated by commas
                 df_data = []
                 for row in schedule_data:
                     # Create time slot from day and start time
                     time_slot = f"{row[0]} {row[1]}"  # e.g., "Monday 08:30"
-                    course_id = row[3] if len(row) > 3 else "Unknown"  # Course name
-                    df_data.append({
-                        "Course ID": course_id,
-                        "Scheduled Time": time_slot
-                    })
+                    courses_str = row[3] if len(row) > 3 else ""
+                    
+                    # Split multiple courses and create separate entries for conflict checking
+                    if courses_str:
+                        courses = [course.strip() for course in courses_str.split(',')]
+                        for course in courses:
+                            df_data.append({
+                                "Course ID": course,
+                                "Scheduled Time": time_slot
+                            })
+                    
                 schedule_df = pd.DataFrame(df_data)
             else:
                 return JSONResponse(status_code=404, content={
@@ -1027,11 +1034,21 @@ async def download_conflicts_csv(request: Request):
                     "detail": "Schedule data missing required columns 'Course ID' or 'Scheduled Time'."
                 })
         
-        # Get student course mappings
-        from src.database_management.database_retrieval import student_pref
-        student_course_map = student_pref(db_path)
+        # Use the SAME data format as the algorithm to get consistent results
+        from src.database_management.database_retrieval import registration_data_with_sections
+        from src.data_preprocessing import prepare_student_course_section_map
         
-        # Use existing conflict checker
+        # Get section-aware registration data (same as algorithm)
+        registration_df = registration_data_with_sections(db_path)
+        if registration_df.empty:
+            return JSONResponse(status_code=404, content={
+                "detail": "No student enrollment data found. Cannot check conflicts."
+            })
+        
+        # Create student course map with sections (same as algorithm)
+        student_course_map = prepare_student_course_section_map(registration_df)
+        
+        # Use existing conflict checker with algorithm's data format
         from src.conflict_checker import check_conflicts
         conflicts_df = check_conflicts(schedule_df, student_course_map)
         
@@ -1192,7 +1209,6 @@ async def show_student_timetable(request: Request, roll_number: str):
     user_roll_in_session = user_info.get("roll_number")
 
     schedule_data = get_student_schedule(roll_number, db_path)
-    print("Schedule Data:", schedule_data)  # Add this line for debugging
     return templates.TemplateResponse(
         "student_timetable.html",
         {

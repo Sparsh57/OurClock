@@ -8,8 +8,382 @@ def get_day_from_time_slot(time_slot: str) -> str:
     """
     Example: "Monday 9am-10am" -> "Monday"
     Adjust if your actual string format is different.
-    """
+"""
     return time_slot.split()[0]
+
+
+def diagnose_phase1_conflicts(courses: Dict[str, Dict[str, List[str]]],
+                             course_classes_per_week: Dict[str, int]) -> str:
+    """
+    Diagnose Phase 1 failures: Basic classes per week constraints
+    """
+    diagnosis_lines = [
+        "PHASE 1 FAILED: Basic 'classes per week' constraints cannot be satisfied",
+        "",
+        "DETAILED ANALYSIS:",
+        "=" * 50
+    ]
+    
+    problem_courses = []
+    
+    for course_id, classes_needed in course_classes_per_week.items():
+        if course_id not in courses:
+            problem_courses.append({
+                'course': course_id,
+                'needed': classes_needed,
+                'available': 0,
+                'issue': 'Course not found in availability data'
+            })
+            continue
+        
+        # Get maximum available slots across all professors for this course
+        max_available = 0
+        course_data = courses[course_id]
+        
+        for professor, slots in course_data.items():
+            max_available = max(max_available, len(slots))
+        
+        if classes_needed > max_available:
+            problem_courses.append({
+                'course': course_id,
+                'needed': classes_needed,
+                'available': max_available,
+                'issue': 'Insufficient time slots'
+            })
+    
+    if problem_courses:
+        diagnosis_lines.append("PROBLEM COURSES:")
+        diagnosis_lines.append("-" * 20)
+        
+        for course_info in problem_courses:
+            diagnosis_lines.extend([
+                f"Course: {course_info['course']}",
+                f"  Classes needed per week: {course_info['needed']}",
+                f"  Maximum available slots: {course_info['available']}",
+                f"  Issue: {course_info['issue']}",
+                ""
+            ])
+        
+        diagnosis_lines.extend([
+            "RECOMMENDED SOLUTIONS:",
+            "1. Add more time slots to the weekly schedule",
+            "2. Reduce classes per week for problematic courses",
+            "3. Check professor busy slots - may be too restrictive",
+            "4. Verify course requirements are realistic for available time"
+        ])
+    else:
+        diagnosis_lines.append("No obvious course-level issues found. This may be a complex constraint interaction.")
+    
+    return "\n".join(diagnosis_lines)
+
+
+def diagnose_phase2_conflicts(courses: Dict[str, Dict[str, List[str]]],
+                             course_professor_map: Dict[str, Union[str, List[str]]],
+                             course_classes_per_week: Dict[str, int]) -> str:
+    """
+    Diagnose specific professor conflicts that cause Phase 2 failures
+    """
+    # Build professor -> courses mapping
+    prof_dict = defaultdict(list)
+    for c_id, profs in course_professor_map.items():
+        if isinstance(profs, str):
+            profs = [profs]
+        elif profs is None:
+            profs = []
+        
+        for prof in profs:
+            prof_dict[prof].append(c_id)
+    
+    diagnosis_lines = [
+        "PHASE 2 FAILED: Professor scheduling conflicts detected",
+        "",
+        "DETAILED CONFLICT ANALYSIS:",
+        "=" * 50
+    ]
+    
+    # Track critical issues
+    critical_professors = []
+    
+    for professor, course_list in prof_dict.items():
+        if not course_list:
+            continue
+            
+        # Count total classes needed for this professor
+        total_classes_needed = sum(course_classes_per_week.get(c_id, 0) for c_id in course_list)
+        
+        # Count available slots for this professor
+        available_slots = 0
+        prof_courses = courses.get(course_list[0], {}) if course_list else {}
+        if professor in prof_courses:
+            available_slots = len(prof_courses[professor])
+        else:
+            # Check all courses to find the professor's availability
+            for c_id in course_list:
+                if c_id in courses and professor in courses[c_id]:
+                    available_slots = len(courses[c_id][professor])
+                    break
+        
+        # Determine conflict severity
+        conflict_type = "OK"
+        if total_classes_needed > available_slots:
+            conflict_type = "CRITICAL"
+            critical_professors.append(professor)
+        elif total_classes_needed == available_slots:
+            conflict_type = "WARNING"
+        
+        diagnosis_lines.extend([
+            f"Professor: {professor}",
+            f"  Assigned Courses: {', '.join(course_list)}",
+            f"  Total Classes Needed: {total_classes_needed}",
+            f"  Available Time Slots: {available_slots}",
+            f"  Status: {conflict_type}",
+            ""
+        ])
+    
+    # Add summary and recommendations
+    if critical_professors:
+        diagnosis_lines.extend([
+            "CRITICAL ISSUES FOUND:",
+            "-" * 25
+        ])
+        for prof in critical_professors:
+            diagnosis_lines.append(f"Redistribute courses from: {prof}")
+        
+        diagnosis_lines.extend([
+            "",
+            "RECOMMENDED ACTIONS:",
+            "1. Remove busy slots for overloaded professors",
+            "2. Reassign some courses to other professors", 
+            "3. Add more time slots to the schedule",
+            "4. Reduce classes per week for some courses"
+        ])
+    
+    # Check for courses without professors
+    unassigned_courses = []
+    for c_id, profs in course_professor_map.items():
+        if not profs or (isinstance(profs, list) and not profs):
+            unassigned_courses.append(c_id)
+    
+    if unassigned_courses:
+        diagnosis_lines.extend([
+            "",
+            "COURSES WITHOUT ASSIGNED PROFESSORS:",
+            "-" * 35
+        ])
+        diagnosis_lines.extend(unassigned_courses)
+        diagnosis_lines.extend([
+            "",
+            "Action Required: Assign professors to these courses"
+        ])
+    
+    return "\n".join(diagnosis_lines)
+
+
+def diagnose_phase3_conflicts(courses: Dict[str, Dict[str, List[str]]],
+                             course_classes_per_week: Dict[str, int],
+                             max_classes_per_slot: int) -> str:
+    """
+    Diagnose Phase 3 failures: Time slot capacity constraints
+    """
+    diagnosis_lines = [
+        "PHASE 3 FAILED: Time slot capacity limit exceeded",
+        "",
+        "DETAILED CAPACITY ANALYSIS:",
+        "=" * 50
+    ]
+    
+    # Count total classes needed
+    total_classes = sum(course_classes_per_week.values())
+    
+    # Count available time slots (unique across all courses)
+    all_time_slots = set()
+    for course_data in courses.values():
+        for prof_slots in course_data.values():
+            all_time_slots.update(prof_slots)
+    
+    total_capacity = len(all_time_slots) * max_classes_per_slot
+    
+    diagnosis_lines.extend([
+        f"Total classes needed: {total_classes}",
+        f"Available time slots: {len(all_time_slots)}",
+        f"Max classes per slot: {max_classes_per_slot}",
+        f"Total capacity: {total_capacity}",
+        f"Capacity deficit: {total_classes - total_capacity}",
+        "",
+        "COURSES REQUIRING CLASSES:",
+        "-" * 30
+    ])
+    
+    # Show breakdown by course
+    for course_id, classes in course_classes_per_week.items():
+        diagnosis_lines.append(f"{course_id}: {classes} classes")
+    
+    diagnosis_lines.extend([
+        "",
+        "RECOMMENDED SOLUTIONS:",
+        f"1. Increase max classes per slot from {max_classes_per_slot}",
+        "2. Add more time slots to the schedule",
+        "3. Reduce classes per week for some courses",
+        "4. Split large courses into multiple sections"
+    ])
+    
+    return "\n".join(diagnosis_lines)
+
+
+def diagnose_phase4_conflicts(courses: Dict[str, Dict[str, List[str]]],
+                             course_professor_map: Dict[str, Union[str, List[str]]]) -> str:
+    """
+    Diagnose Phase 4 failures: Student conflict constraints (rare)
+    """
+    diagnosis_lines = [
+        "PHASE 4 FAILED: Student conflict constraints causing infeasibility",
+        "",
+        "ANALYSIS:",
+        "=" * 50,
+        "",
+        "This is unusual since student conflict constraints are designed to be soft/flexible.",
+        "The failure suggests a deeper scheduling problem or unusual enrollment patterns.",
+        "",
+        "POSSIBLE CAUSES:",
+        "- Very high course overlap in student enrollments",
+        "- Limited time slot availability after professor constraints", 
+        "- Complex interaction between multiple constraint types",
+        "",
+        "COURSE-PROFESSOR ASSIGNMENTS:",
+        "-" * 35
+    ]
+    
+    for course_id, profs in course_professor_map.items():
+        if isinstance(profs, str):
+            prof_list = [profs]
+        elif isinstance(profs, list):
+            prof_list = profs
+        else:
+            prof_list = ["No professor assigned"]
+        
+        diagnosis_lines.append(f"{course_id}: {', '.join(prof_list)}")
+    
+    diagnosis_lines.extend([
+        "",
+        "RECOMMENDED ACTIONS:",
+        "1. Review student enrollment patterns for unusual overlaps",
+        "2. Try disabling some constraint options temporarily",
+        "3. Check if professor availability is too restrictive",
+        "4. Consider splitting high-enrollment courses",
+        "5. Contact system administrator for advanced troubleshooting"
+    ])
+    
+    return "\n".join(diagnosis_lines)
+
+
+def diagnose_phase5_conflicts(courses: Dict[str, Dict[str, List[str]]],
+                             course_classes_per_week: Dict[str, int]) -> str:
+    """
+    Diagnose Phase 5 failures: No same course twice on same day
+    """
+    diagnosis_lines = [
+        "PHASE 5 FAILED: 'No same course twice on the same day' constraint",
+        "",
+        "ANALYSIS:",
+        "=" * 50
+    ]
+    
+    # Analyze courses that need multiple classes
+    multi_class_courses = [(cid, classes) for cid, classes in course_classes_per_week.items() if classes > 1]
+    
+    if multi_class_courses:
+        diagnosis_lines.extend([
+            "COURSES NEEDING MULTIPLE CLASSES PER WEEK:",
+            "-" * 45
+        ])
+        
+        for course_id, classes in multi_class_courses:
+            # Count available days for this course
+            available_days = set()
+            if course_id in courses:
+                for prof_slots in courses[course_id].values():
+                    for slot in prof_slots:
+                        day = get_day_from_time_slot(slot)
+                        available_days.add(day)
+            
+            status = "OK" if classes <= len(available_days) else "PROBLEM"
+            
+            diagnosis_lines.extend([
+                f"Course: {course_id}",
+                f"  Classes needed: {classes}",
+                f"  Available days: {len(available_days)} ({', '.join(sorted(available_days))})",
+                f"  Status: {status}",
+                ""
+            ])
+    
+    diagnosis_lines.extend([
+        "RECOMMENDED SOLUTIONS:",
+        "1. Add time slots on different days of the week",
+        "2. Review professor busy slots - some may block entire days",
+        "3. Reduce classes per week for problematic courses",
+        "4. Consider disabling the 'same day' constraint if flexible scheduling is acceptable"
+    ])
+    
+    return "\n".join(diagnosis_lines)
+
+
+def diagnose_phase6_conflicts(courses: Dict[str, Dict[str, List[str]]],
+                             course_classes_per_week: Dict[str, int]) -> str:
+    """
+    Diagnose Phase 6 failures: No consecutive days constraint
+    """
+    diagnosis_lines = [
+        "PHASE 6 FAILED: 'No consecutive days' constraint",
+        "",
+        "ANALYSIS:",
+        "=" * 50
+    ]
+    
+    # Analyze day distribution
+    all_available_days = set()
+    for course_data in courses.values():
+        for prof_slots in course_data.values():
+            for slot in prof_slots:
+                day = get_day_from_time_slot(slot)
+                all_available_days.add(day)
+    
+    day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    available_ordered_days = [day for day in day_order if day in all_available_days]
+    
+    diagnosis_lines.extend([
+        f"Available days in schedule: {', '.join(available_ordered_days)}",
+        f"Total courses needing multiple classes: {sum(1 for c in course_classes_per_week.values() if c > 1)}",
+        "",
+        "CONSECUTIVE DAY ANALYSIS:",
+        "-" * 30
+    ])
+    
+    # Check for consecutive day availability
+    consecutive_pairs = []
+    for i in range(len(available_ordered_days) - 1):
+        day1, day2 = available_ordered_days[i], available_ordered_days[i + 1]
+        day1_idx = day_order.index(day1)
+        day2_idx = day_order.index(day2)
+        if day2_idx == day1_idx + 1:
+            consecutive_pairs.append((day1, day2))
+    
+    if consecutive_pairs:
+        diagnosis_lines.append("Consecutive day pairs available:")
+        for day1, day2 in consecutive_pairs:
+            diagnosis_lines.append(f"  {day1} -> {day2}")
+    else:
+        diagnosis_lines.append("No consecutive days available - this may not be the issue")
+    
+    diagnosis_lines.extend([
+        "",
+        "RECOMMENDED SOLUTIONS:",
+        "1. Add time slots on non-consecutive days (e.g., Monday, Wednesday, Friday)",
+        "2. Consider disabling the 'consecutive days' constraint",
+        "3. Review professor availability across different days",
+        "4. Reduce classes per week requirements where possible"
+    ])
+    
+    return "\n".join(diagnosis_lines)
 
 
 def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
@@ -306,15 +680,9 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                                    add_same=False,
                                    add_consec=False)
     if p1_status == cp_model.INFEASIBLE:
-        error_msg = ("PHASE 1 FAILED: Basic 'classes per week' constraints cannot be satisfied.\n\n"
-                    "This means one or more courses don't have enough available time slots "
-                    "to meet their classes per week requirements.\n\n"
-                    "Solutions:\n"
-                    "• Add more time slots to the schedule\n"
-                    "• Check if professor busy slots are too restrictive\n"
-                    "• Verify course classes per week requirements are realistic")
-        print(f"[DEBUG] {error_msg}")
-        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), error_msg
+        detailed_error = diagnose_phase1_conflicts(courses, course_classes_per_week)
+        print(f"[DEBUG] {detailed_error}")
+        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), detailed_error
 
     # PHASE 2
     p2_status, p2_df = solve_phase("PHASE 2",
@@ -324,16 +692,10 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                                    add_same=False,
                                    add_consec=False)
     if p2_status == cp_model.INFEASIBLE:
-        error_msg = ("PHASE 2 FAILED: Professor scheduling conflicts detected.\n\n"
-                    "One or more professors are assigned to teach multiple courses "
-                    "at the same time, or their busy slots are too restrictive.\n\n"
-                    "Solutions:\n"
-                    "• Review professor assignments for overlapping courses\n"
-                    "• Check professor busy slot selections\n"
-                    "• Consider redistributing courses among professors\n"
-                    "• Add more available time slots for overloaded professors")
-        print(f"[DEBUG] {error_msg}")
-        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), error_msg
+        # Generate detailed diagnostics
+        detailed_error = diagnose_phase2_conflicts(courses, course_professor_map, course_classes_per_week)
+        print(f"[DEBUG] {detailed_error}")
+        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), detailed_error
 
     # PHASE 3
     p3_status, p3_df = solve_phase("PHASE 3",
@@ -343,16 +705,9 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                                    add_same=False,
                                    add_consec=False)
     if p3_status == cp_model.INFEASIBLE:
-        error_msg = (f"PHASE 3 FAILED: Time slot capacity limit exceeded.\n\n"
-                    f"The current limit of {MAX_CLASSES_PER_SLOT} classes per time slot "
-                    f"is insufficient to accommodate all required course sessions.\n\n"
-                    f"Solutions:\n"
-                    f"• Increase max classes per slot from {MAX_CLASSES_PER_SLOT} in time slot settings\n"
-                    f"• Add more time slots to spread out the course load\n"
-                    f"• Reduce the number of courses or course sections\n"
-                    f"• Consider splitting large courses into multiple sections")
-        print(f"[DEBUG] {error_msg}")
-        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), error_msg
+        detailed_error = diagnose_phase3_conflicts(courses, course_classes_per_week, MAX_CLASSES_PER_SLOT)
+        print(f"[DEBUG] {detailed_error}")
+        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), detailed_error
 
     # PHASE 4
     p4_status, p4_df = solve_phase("PHASE 4",
@@ -362,16 +717,9 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                                    add_same=False,
                                    add_consec=False)
     if p4_status == cp_model.INFEASIBLE:
-        error_msg = ("PHASE 4 FAILED: Student conflict constraints (rare).\n\n"
-                    "The soft student conflict constraints are causing infeasibility, "
-                    "which is unusual since they are designed to be flexible.\n\n"
-                    "Solutions:\n"
-                    "• This suggests a deeper scheduling problem\n"
-                    "• Try regenerating with fewer constraint options enabled\n"
-                    "• Review student course enrollments for unusual patterns\n"
-                    "• Contact system administrator")
-        print(f"[DEBUG] {error_msg}")
-        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), error_msg
+        detailed_error = diagnose_phase4_conflicts(courses, course_professor_map)
+        print(f"[DEBUG] {detailed_error}")
+        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), detailed_error
 
     # PHASE 5: No same course twice on the same day
     p5_status, p5_df = solve_phase("PHASE 5",
@@ -381,16 +729,9 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                                    add_same=add_no_same_day,
                                    add_consec=False)
     if p5_status == cp_model.INFEASIBLE:
-        error_msg = ("PHASE 5 FAILED: 'No same course twice on the same day' constraint.\n\n"
-                    "One or more courses require multiple sessions but only have "
-                    "available time slots on the same day(s).\n\n"
-                    "Solutions:\n"
-                    "• Add time slots on different days\n"
-                    "• Review professor busy slots - some may be blocking too many days\n"
-                    "• Check if courses have realistic classes per week requirements\n"
-                    "• Consider disabling the 'same day' constraint if appropriate")
-        print(f"[DEBUG] {error_msg}")
-        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), error_msg
+        detailed_error = diagnose_phase5_conflicts(courses, course_classes_per_week)
+        print(f"[DEBUG] {detailed_error}")
+        return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), detailed_error
 
     print("[DEBUG] Schedule found through PHASE 5 constraints.")
     # PHASE 6: No consecutive days (toggleable)
@@ -402,16 +743,9 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                                        add_same=add_no_same_day,
                                        add_consec=add_no_consec_days)
         if p6_status == cp_model.INFEASIBLE:
-            error_msg = ("PHASE 6 FAILED: 'No consecutive days' constraint.\n\n"
-                        "The requirement to avoid scheduling courses on consecutive days "
-                        "cannot be satisfied with the current time slot configuration.\n\n"
-                        "Solutions:\n"
-                        "• Add more time slots spread across different days\n"
-                        "• Consider disabling the 'consecutive days' constraint\n"
-                        "• Review course classes per week requirements\n"
-                        "• Check professor availability across different days")
-            print(f"[DEBUG] {error_msg}")
-            return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), error_msg
+            detailed_error = diagnose_phase6_conflicts(courses, course_classes_per_week)
+            print(f"[DEBUG] {detailed_error}")
+            return pd.DataFrame(columns=["Course ID", "Scheduled Time"]), detailed_error
         print("[DEBUG] Schedule found through PHASE 6 constraints.")
         return p6_df, "Schedule found through PHASE 6 constraints."
 

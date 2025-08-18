@@ -37,10 +37,18 @@ def registration_data(db_path):
             
             # Query to get student registration data with joins
             # Use GROUP_CONCAT to combine multiple professors for a course
+            # Use database-specific string aggregation function
+            if is_postgresql():
+                # PostgreSQL uses string_agg
+                agg_func = func.string_agg(Professor.Email.distinct(), ', ')
+            else:
+                # SQLite uses group_concat
+                agg_func = func.group_concat(Professor.Email.distinct())
+            
             query = session.query(
                 Student.Email.label('Roll No.'),
                 Course.CourseName.label('G CODE'),
-                func.group_concat(Professor.Email.distinct()).label('Professor'),
+                agg_func.label('Professor'),
                 Course.CourseType.label('Type'),
                 Course.ClassesPerWeek.label('Classes Per Week')
             ).select_from(CourseStud)\
