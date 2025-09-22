@@ -226,23 +226,47 @@ def insert_courses_professors(file, db_path):
                         processed_courses.add(course_code)
 
                     # Prepare course-professor relationships with section assignments
-                    # Use round-robin assignment for sections
-                    for section_num in range(1, num_sections + 1):
-                        # Assign professor using round-robin logic
-                        prof_index = (section_num - 1) % len(faculty_names)
-                        assigned_professor = faculty_names[prof_index]
-                        
-                        professor_id = prof_dict.get(assigned_professor)
-                        if professor_id:
-                            course_professor_relationships.append({
-                                'CourseName': course_code,  # Will map to CourseID after bulk insert
-                                'ProfessorID': professor_id,
-                                'FacultyName': assigned_professor,
-                                'SectionNumber': section_num
-                            })
-                            logger.info(f"Will link professor {assigned_professor} to course {course_code} section {section_num}")
-                        else:
-                            logger.warning(f"Professor '{assigned_professor}' not found for course {course_code}")
+                    # Check if this is team teaching (multiple professors for same course)
+                    # vs distributed teaching (different professors for different sections)
+                    
+                    if len(faculty_names) > 1 and num_sections > 1:
+                        # OPTION 1: Team teaching - all professors teach all sections together
+                        # This is the case for courses like "Prof A & Prof B & Prof C"
+                        for section_num in range(1, num_sections + 1):
+                            for assigned_professor in faculty_names:
+                                professor_id = prof_dict.get(assigned_professor)
+                                if professor_id:
+                                    course_professor_relationships.append({
+                                        'CourseName': course_code,
+                                        'ProfessorID': professor_id,
+                                        'FacultyName': assigned_professor,
+                                        'SectionNumber': section_num
+                                    })
+                                    logger.info(f"[TEAM TEACHING] Will link professor {assigned_professor} to course {course_code} section {section_num}")
+                                else:
+                                    logger.warning(f"Professor '{assigned_professor}' not found for course {course_code}")
+                    else:
+                        # OPTION 2: Single professor or round-robin assignment for multiple sections
+                        for section_num in range(1, num_sections + 1):
+                            if len(faculty_names) == 1:
+                                # Single professor teaches all sections
+                                assigned_professor = faculty_names[0]
+                            else:
+                                # Round-robin assignment for multiple professors
+                                prof_index = (section_num - 1) % len(faculty_names)
+                                assigned_professor = faculty_names[prof_index]
+                            
+                            professor_id = prof_dict.get(assigned_professor)
+                            if professor_id:
+                                course_professor_relationships.append({
+                                    'CourseName': course_code,
+                                    'ProfessorID': professor_id,
+                                    'FacultyName': assigned_professor,
+                                    'SectionNumber': section_num
+                                })
+                                logger.info(f"[DISTRIBUTED] Will link professor {assigned_professor} to course {course_code} section {section_num}")
+                            else:
+                                logger.warning(f"Professor '{assigned_professor}' not found for course {course_code}")
 
                 except Exception as e:
                     logger.error(f"Error processing course {row.get('Course code', 'Unknown')}: {e}")

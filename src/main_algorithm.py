@@ -128,10 +128,8 @@ def gen_timetable_with_sections(db_path, max_classes_per_slot=24,
     # Get section-specific professor mapping
     course_professor_map = get_course_section_professor_mapping(db_path)
     
-    # Convert to the format expected by the algorithm
-    course_professor_map_all = {}
-    for course_section_id, prof_email in course_professor_map.items():
-        course_professor_map_all[course_section_id] = [prof_email]
+    # The mapping now returns lists of professors, so we can use it directly
+    course_professor_map_all = course_professor_map
     
     # Get other required data
     df_faculty_pref = faculty_pref(db_path)

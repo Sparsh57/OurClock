@@ -407,6 +407,7 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
       PHASE 4) Student conflicts (soft) -> penalize scheduling multiple courses for one student in the same slot.
                Additionally, a very soft extra penalty is added if a student's two required courses clash.
       PHASE 5) No same course twice on the same day (hard constraint).
+      PHASE 6) No consecutive days constraint (soft penalty).
 
     If a phase is infeasible, we return an empty DataFrame and an error message.
     If all phases succeed, we return the schedule and success message.
@@ -591,8 +592,6 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                 for s, var in slot_dict.items(): # Fetches from the slot dictionary of the given course c_id. (s -> slot, var -> CP-SAT BOOL VAR) 
                     day = get_day_from_time_slot(s)
                     day_vars[day].append(var)
-                # Instead, turn it into a penalty
-                    print("USING NEW LOGIC!!!!!!!!!!!!!!!!!!!!!!")
                     
                     for i in range(len(day_order)-1):
                         d1, d2 = day_order[i], day_order[i+1]
