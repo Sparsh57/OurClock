@@ -13,32 +13,48 @@ logger = logging.getLogger(__name__)
 
 def find_matching_course_pattern(individual_course, course_dict):
     """
-    Find which complex course pattern in the database contains the individual course code.
+    Find which course pattern in the database matches the individual course code.
+    Treats courses with parenthetical suffixes as individual courses.
     
     Examples:
-    - individual_course = "HIST330", course_dict contains "HIST330|SOCL330|POLT330" -> returns "HIST330|SOCL330|POLT330"
-    - individual_course = "COMP310", course_dict contains "COMP310&COMP410" -> returns "COMP310&COMP410"
-    - individual_course = "HIST328", course_dict contains "HIST328|BIOS328|LITT328|ARTS328&HIST428|BIOS428|LITT428|ARTS428" -> returns that pattern
+    - individual_course = "COMP208|DATA208(A)", course_dict contains "COMP208|DATA208(A)" -> exact match
+    - individual_course = "COMP208|DATA208(B)", course_dict contains "COMP208|DATA208(B)" -> exact match  
+    - individual_course = "HIST330", course_dict contains "HIST330|SOCL330|POLT330" -> pattern match
     
-    :param individual_course: Single course code from student enrollment (e.g., "HIST330")
-    :param course_dict: Dictionary mapping complex course patterns to course IDs
+    :param individual_course: Course code from student enrollment (e.g., "COMP208|DATA208(A)")
+    :param course_dict: Dictionary mapping course patterns to course IDs
     :return: (course_pattern, course_id) tuple if found, None otherwise
     """
-    # First, try exact match (for simple courses)
+    # First, try exact match - this handles individual courses including those with sections
     if individual_course in course_dict:
         return (individual_course, course_dict[individual_course])
     
-    # Look for the individual course within complex patterns
+    # If no exact match and the course has parentheses, try matching without the suffix
+    # This is for backward compatibility with courses that might not have section suffixes in the database
+    if "(" in individual_course and ")" in individual_course:
+        base_course = individual_course.split("(")[0].strip()
+        if base_course in course_dict:
+            return (base_course, course_dict[base_course])
+    
+    # Look for the individual course within complex patterns with | or &
     for course_pattern, course_id in course_dict.items():
         # Check if the individual course is part of this pattern
         if '|' in course_pattern or '&' in course_pattern:
             # Split by both | and & to get all course components
-            # Handle patterns like "A|B|C&D|E|F" by splitting on both separators
             pattern_parts = course_pattern.replace('&', '|').split('|')
             pattern_courses = [part.strip() for part in pattern_parts]
             
+            # Check if individual_course matches any part exactly
             if individual_course in pattern_courses:
                 return (course_pattern, course_id)
+            
+            # Also check if individual_course matches any part when we remove parenthetical suffixes
+            base_individual = individual_course.split('(')[0].strip() if '(' in individual_course else individual_course
+            for pattern_course in pattern_courses:
+                # Remove parenthetical suffix like "(A)" from "COURSE123(A)"
+                base_pattern_course = pattern_course.split('(')[0].strip() if '(' in pattern_course else pattern_course
+                if base_individual == base_pattern_course:
+                    return (course_pattern, course_id)
     
     return None
 
@@ -134,33 +150,13 @@ def insert_course_students(file, db_path):
 
                     # Handle section information in G CODE
                     if "(" in g_code and ")" in g_code:
-                        # Extract course code and section from format like "COURSE123(Sec1)"
-                        course = g_code.split("(")[0].strip()
-                        section_info = g_code.split("(")[1].replace(")", "").strip()
-                        
-                        # Extract section number if it's in format "Sec1", "Sec2", etc.
-                        if section_info.startswith("Sec"):
-                            try:
-                                section_number = int(section_info.replace("Sec", ""))
-                            except ValueError:
-                                section_number = 1
-                        # Handle letter format like "A", "B", "C"
-                        elif len(section_info) == 1 and section_info.isalpha():
-                            try:
-                                section_number = ord(section_info.upper()) - ord('A') + 1  # Convert A->1, B->2, etc.
-                            except ValueError:
-                                section_number = 1
+                        # For courses like "COMP208|DATA208(A)", treat the full string as the course name
+                        # Don't parse it - it's already a complete course identifier
+                        course = g_code.strip()
                     elif "-" in g_code and g_code.split("-")[-1].isalpha() and len(g_code.split("-")[-1]) == 1:
                         # Handle dash-separated format like "DATA201-A", "DATA201-B"
-                        parts = g_code.split("-")
-                        course = "-".join(parts[:-1])  # Everything except the last part
-                        section_letter = parts[-1].upper()
-                        
-                        # Convert section letter to number (A=1, B=2, etc.)
-                        try:
-                            section_number = ord(section_letter) - ord('A') + 1
-                        except ValueError:
-                            section_number = 1
+                        # These should also be treated as complete course identifiers
+                        course = g_code.strip()
                     else:
                         # No section info in G CODE, use course as-is
                         course = g_code.strip()

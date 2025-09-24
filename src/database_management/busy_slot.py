@@ -56,8 +56,8 @@ def insert_professor_busy_slots(file, db_path):
             professors = session.query(User).filter_by(Role='Professor').all()
             slots = session.query(Slot).all()
             
-            # Create dictionaries for mapping
-            prof_dict = {prof.Email: prof.UserID for prof in professors}
+            # Create dictionaries for mapping (case-insensitive for professors)
+            prof_dict = {prof.Email.lower(): prof.UserID for prof in professors}
             slot_dict = {f"{slot.Day} {slot.StartTime}": slot.SlotID for slot in slots}
 
             # Process the data and prepare for bulk insert
@@ -66,7 +66,7 @@ def insert_professor_busy_slots(file, db_path):
             
             for index, row in df_merged.iterrows():
                 try:
-                    prof_id = prof_dict.get(row['Name'])
+                    prof_id = prof_dict.get(row['Name'].lower() if pd.notna(row['Name']) else '')
                     slot_id = slot_dict.get(row['Busy Slot'])
                     
                     if prof_id and slot_id:

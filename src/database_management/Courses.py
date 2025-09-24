@@ -331,10 +331,14 @@ def insert_courses_professors(file, db_path):
                 for rel in session.query(CourseProfessor).all():
                     existing_relations.add((rel.CourseID, rel.ProfessorID, rel.SectionNumber))
 
-                new_relationships = [
-                    rel for rel in relationships_to_insert
-                    if (rel['CourseID'], rel['ProfessorID'], rel['SectionNumber']) not in existing_relations
-                ]
+                # Filter out existing relationships and also deduplicate within new relationships
+                seen_relationships = set()
+                new_relationships = []
+                for rel in relationships_to_insert:
+                    key = (rel['CourseID'], rel['ProfessorID'], rel['SectionNumber'])
+                    if key not in existing_relations and key not in seen_relationships:
+                        new_relationships.append(rel)
+                        seen_relationships.add(key)
 
                 if new_relationships:
                     session.bulk_insert_mappings(CourseProfessor, new_relationships)
