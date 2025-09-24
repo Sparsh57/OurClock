@@ -396,7 +396,7 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                      add_timeslot_capacity: bool = True,
                      add_student_conflicts: bool = True,
                      add_no_same_day: bool = True,
-                     add_no_consec_days: bool = False,                
+                     add_no_consec_days: bool = False,
                      max_classes_per_slot: int = 24) -> tuple[pd.DataFrame, str]:
     """
     Debug-friendly scheduling function with incremental constraint phases:
@@ -406,8 +406,8 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
       PHASE 3) Limit each slot to at most max_classes_per_slot classes.
       PHASE 4) Student conflicts (soft) -> penalize scheduling multiple courses for one student in the same slot.
                Additionally, a very soft extra penalty is added if a student's two required courses clash.
-      PHASE 5) No same course twice on the same day (hard constraint).
-      PHASE 6) No consecutive days constraint (soft penalty).
+      PHASE 5) No same course twice on the same day (soft constraint with very high penalty).
+      PHASE 6) No consecutive days constraint (soft penalty with very high weight).
 
     If a phase is infeasible, we return an empty DataFrame and an error message.
     If all phases succeed, we return the schedule and success message.
@@ -423,7 +423,8 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
     STUDENT_CONFLICT_WEIGHT = 10000  # penalty weight for each student conflict
     REQUIRED_CONFLICT_WEIGHT = 10  # very soft penalty for a clash between two Required courses
     NON_PREFERRED_SLOTS = 50
-    CONSEC_CONFLICT_WEIGHT = 100
+    CONSEC_CONFLICT_WEIGHT = 10000  # Very high penalty to effectively prevent consecutive days
+    SAME_DAY_CONFLICT_WEIGHT = 50000  # Very high penalty to heavily discourage same course twice on same day
 
     # ---------------------------------------------------------
     # Early validation: Check if we have any time slots at all
@@ -477,6 +478,7 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
         conflict_required_vars = []
         slot_penalty_vars      = []
         consec_conflict_vars   = []
+        same_day_conflict_vars = []
 
         model = cp_model.CpModel()
 
@@ -569,7 +571,8 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                         model.Add(sum(var_list) <= 1).OnlyEnforceIf(conflict_req_var.Not())
                         conflict_required_vars.append(conflict_req_var)
 
-        # PHASE 5) No same course twice on the same day (hard constraint)
+        # PHASE 5) No same course twice on the same day (soft constraint with high penalty)
+        same_day_conflict_vars = []
         if add_same:
             for c_id, slot_dict in course_time_vars.items():
                 # Group the course's slots by day
@@ -577,47 +580,48 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
                 for s, var in slot_dict.items():
                     day = get_day_from_time_slot(s)
                     day_map[day].append(var)
-                # Each day can have at most 1 session of this course
+                # Create penalty variables for multiple sessions on the same day
                 for day, var_list in day_map.items():
                     if len(var_list) > 1:
-                        model.Add(sum(var_list) <= 1)
+                        # Create a penalty variable for each extra session on the same day
+                        for i in range(1, len(var_list)):
+                            same_day_penalty_var = model.NewBoolVar(f'same_day_penalty_{c_id}_{day}_{i}')
+                            # Penalty is triggered when more than one session is scheduled on the same day
+                            model.Add(sum(var_list[:i+1]) >= 2).OnlyEnforceIf(same_day_penalty_var)
+                            model.Add(sum(var_list[:i+1]) <= 1).OnlyEnforceIf(same_day_penalty_var.Not())
+                            same_day_conflict_vars.append(same_day_penalty_var)
         
         # PHASE 6) No classes on consecutive days
         if add_consec:
             day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            day_to_index = {day: idx for idx, day in enumerate(day_order)}
             
             for c_id, slot_dict in course_time_vars.items():
-                day_vars = defaultdict(list) # empty-list as keys; can use append
-                for s, var in slot_dict.items(): # Fetches from the slot dictionary of the given course c_id. (s -> slot, var -> CP-SAT BOOL VAR) 
+                # Group slots by day for this course
+                day_vars = defaultdict(list)
+                for s, var in slot_dict.items():
                     day = get_day_from_time_slot(s)
                     day_vars[day].append(var)
-                    
-                    for i in range(len(day_order)-1):
-                        d1, d2 = day_order[i], day_order[i+1]
-                        if d1 in day_vars and d2 in day_vars:
-                            # indicator if the course is scheduled ANY time on day1 or day2
-                            d1_var = model.NewBoolVar(f'{c_id}_on_{d1}')
-                            d2_var = model.NewBoolVar(f'{c_id}_on_{d2}')
-                            model.AddMaxEquality(d1_var, day_vars[d1])
-                            model.AddMaxEquality(d2_var, day_vars[d2])
-
-                            # build a flag that is 1 exactly when both d1_var & d2_var are 1
-                            cv = model.NewBoolVar(f'consec_{c_id}_{d1}_{d2}')
-                            # cv ⇒ (d1_var AND d2_var)
-                            model.AddBoolAnd([d1_var, d2_var]).OnlyEnforceIf(cv)
-                            # ¬cv ⇒ (¬d1_var OR ¬d2_var)
-                            model.AddBoolOr([d1_var.Not(), d2_var.Not()]).OnlyEnforceIf(cv.Not())
-                            consec_conflict_vars.append(cv)
-            '''
-            for i in range(6): 
-                d1, d2 = day_order[i], day_order[i+1] # Fetches consective days 
-                if d1 in day_vars and d2 in day_vars:
-                    d1_var = model.NewBoolVar(f'{c_id}_on_{d1}')
-                    d2_var = model.NewBoolVar(f'{c_id}_on_{d2}')
-                    model.AddMaxEquality(d1_var, day_vars[d1]) # Binds each *_var to the list of time slots on that day.
-                    model.AddMaxEquality(d2_var, day_vars[d2]) # Same here 
-                    #model.Add(d1_var + d2_var <= 1) # The constraint itsel - course can be scheduled on d1 or d2, but not both.'''
+                
+                # Create day indicator variables (one per day, not per slot)
+                day_indicators = {}
+                for day in day_vars:
+                    day_var = model.NewBoolVar(f'{c_id}_on_{day}')
+                    # day_var is True if any slot on this day is scheduled for this course
+                    model.AddMaxEquality(day_var, day_vars[day])
+                    day_indicators[day] = day_var
+                
+                # Add consecutive day constraints (always soft with high penalty)
+                for i in range(len(day_order) - 1):
+                    d1, d2 = day_order[i], day_order[i + 1]
+                    if d1 in day_indicators and d2 in day_indicators:
+                        # Soft constraint: create conflict variable for very high penalty
+                        cv = model.NewBoolVar(f'consec_{c_id}_{d1}_{d2}')
+                        
+                        # cv is True if both consecutive days are used
+                        model.AddBoolAnd([day_indicators[d1], day_indicators[d2]]).OnlyEnforceIf(cv)
+                        model.AddBoolOr([day_indicators[d1].Not(), day_indicators[d2].Not()]).OnlyEnforceIf(cv.Not())
+                        
+                        consec_conflict_vars.append(cv)
                 
         slot_penalty_vars = []
         # We retrieve the course_id and the dictionary 
@@ -636,7 +640,10 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
             total_penalty += REQUIRED_CONFLICT_WEIGHT * sum(conflict_required_vars)
         if slot_penalty_vars: 
             total_penalty += NON_PREFERRED_SLOTS * sum(slot_penalty_vars)
+        if same_day_conflict_vars:
+            total_penalty += SAME_DAY_CONFLICT_WEIGHT * sum(same_day_conflict_vars)
         if consec_conflict_vars:
+            # Apply very high penalty for consecutive days (soft constraint)
             total_penalty += CONSEC_CONFLICT_WEIGHT * sum(consec_conflict_vars)
         model.Minimize(total_penalty)
 
@@ -650,10 +657,11 @@ def schedule_courses(courses: Dict[str, Dict[str, List[str]]],
             consec_violations = sum(int(solver.Value(cv)) for cv in consec_conflict_vars)
             student_violations = sum(int(solver.Value(v)) for v in conflict_vars)
             required_violations = sum(int(solver.Value(v)) for v in conflict_required_vars)
+            same_day_violations = sum(int(solver.Value(v)) for v in same_day_conflict_vars)
             nonpref_uses  = sum(int(solver.Value(v)) for v in slot_penalty_vars)
             total_obj     = solver.ObjectiveValue()
             print(f"[METRICS] consec={consec_violations}, student={student_violations},"
-                f" required={required_violations}, nonpref={nonpref_uses}, obj={total_obj}")
+                f" required={required_violations}, same_day={same_day_violations}, nonpref={nonpref_uses}, obj={total_obj}")
 
 
         schedule_df = pd.DataFrame(columns=["Course ID", "Scheduled Time"])

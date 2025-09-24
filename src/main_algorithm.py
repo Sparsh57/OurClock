@@ -56,7 +56,7 @@ def gen_timetable(db_path, max_classes_per_slot=24,
     :param add_timeslot_capacity: Whether to enforce time slot capacity limits
     :param add_student_conflicts: Whether to add student conflict constraints
     :param add_no_same_day: Whether to prevent same course multiple times per day
-    :param add_no_consec_days: Whether to prevent courses on consecutive days
+    :param add_no_consec_days: Whether to prevent courses on consecutive days (soft constraint with very high penalty)
     """
     # Ensure default time slots exist
     ensure_default_time_slots(db_path)
@@ -107,7 +107,7 @@ def gen_timetable_with_sections(db_path, max_classes_per_slot=24,
     :param add_timeslot_capacity: Whether to enforce time slot capacity limits
     :param add_student_conflicts: Whether to add student conflict constraints
     :param add_no_same_day: Whether to prevent same course multiple times per day
-    :param add_no_consec_days: Whether to prevent courses on consecutive days
+    :param add_no_consec_days: Whether to prevent courses on consecutive days (soft constraint with very high penalty)
     """
     print("Generating timetable with section support...")
     
@@ -250,7 +250,7 @@ def gen_timetable_auto(db_path, max_classes_per_slot=None,
     :param add_timeslot_capacity: Whether to enforce time slot capacity limits
     :param add_student_conflicts: Whether to add student conflict constraints
     :param add_no_same_day: Whether to prevent same course multiple times per day
-    :param add_no_consec_days: Whether to prevent courses on consecutive days
+    :param add_no_consec_days: Whether to prevent courses on consecutive days (soft constraint with very high penalty)
     :return: Schedule data and conflicts
     """
     print(f"🚀 Starting auto timetable generation...")
