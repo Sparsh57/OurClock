@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Course Search - Timetable Management</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .btn-primary { 
+            background-color: #2563eb; 
+            color: white; 
+            padding: 0.5rem 1rem; 
+            border-radius: 0.375rem; 
+            transition: background-color 0.2s;
+        }
+        .btn-primary:hover { background-color: #1d4ed8; }
+        .btn-secondary { 
+            background-color: #f3f4f6; 
+            color: #374151; 
+            padding: 0.5rem 1rem; 
+            border-radius: 0.375rem; 
+            transition: background-color 0.2s;
+        }
+        .btn-secondary:hover { background-color: #e5e7eb; }
+        .table-row:hover { background-color: #f9fafb; }
+        .conflict-high { background-color: #fef2f2; border-left: 4px solid #ef4444; }
+        .conflict-medium { background-color: #fffbeb; border-left: 4px solid #f59e0b; }
+        .conflict-low { background-color: #f0fdf4; border-left: 4px solid #22c55e; }
+        .available { background-color: #eff6ff; border-left: 4px solid #3b82f6; }
+        
+        /* Tooltip styles */
+        .tooltip-container { position: relative; }
+        .tooltip {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            background-color: #1f2937;
+            color: white;
+            padding: 12px;
+            border-radius: 6px;
+            box-shadow: 0 10px 25px -3px rgba(0, 0, 0, 0.4);
+            max-width: 400px;
+            min-width: 300px;
+            pointer-events: none;
+            border: 1px solid #374151;
+        }
+        .tooltip.show {
+            display: block;
+        }
+        .conflict-item {
+            padding: 6px 0;
+            border-bottom: 1px solid #374151;
+        }
+        .conflict-item:last-child {
+            border-bottom: none;
+        }
+        .tooltip-row {
+            cursor: help;
+        }
+        .tooltip-row:hover {
+            background-color: #f3f4f6 !important;
+        }
+    </style>
+</head>
+
+{% include 'navigation.html' %}
+
+<body class="bg-gray-100 min-h-screen">
+    <div class="pt-16">
+        <!-- Header Section -->
+        <div class="bg-white shadow-sm border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Course Search</h1>
+                        <p class="text-gray-600 mt-1">Search and analyze course scheduling conflicts</p>
+                    </div>
+                    <div class="text-sm text-gray-500">
+                        Total courses: {{ total_courses }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Search Section -->
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            {% if no_timetable %}
+            <div class="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                <div class="flex">
+                    <span class="material-icons text-yellow-600 mr-2">warning</span>
+                    <span class="text-yellow-800">{{ message }}</span>
+                </div>
+            </div>
+            {% elif error %}
+            <div class="bg-red-50 border border-red-200 rounded-md p-4">
+                <div class="flex">
+                    <span class="material-icons text-red-600 mr-2">error</span>
+                    <span class="text-red-800">{{ message }}</span>
+                </div>
+            </div>
+            {% else %}
+            
+            <!-- Search Form -->
+            <div class="bg-white rounded-lg shadow p-6 mb-6">
+                <form id="searchForm" class="space-y-4">
+                    <div>
+                        <label for="courseInput" class="block text-sm font-medium text-gray-700 mb-2">
+                            Course Name or Code
+                        </label>
+                        <div class="flex space-x-4">
+                            <div class="flex-1">
+                                <input type="text" 
+                                       id="courseInput" 
+                                       class="block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                                       placeholder="Enter course name (e.g., DATA237, Computer Science...)"
+                                       autocomplete="off">
+                            </div>
+                            <button type="submit" class="btn-primary">
+                                <span class="material-icons align-middle mr-1">search</span>
+                                Search
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Options -->
+                    <div class="border-t pt-4">
+                        <h3 class="text-sm font-medium text-gray-700 mb-3">Professor Constraint Options</h3>
+                        <div class="flex space-x-6">
+                            <label class="flex items-center">
+                                <input type="checkbox" id="ignoreBusySlots" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                <span class="ml-2 text-sm text-gray-700">Ignore professor busy slots</span>
+                            </label>
+                            <label class="flex items-center">
+                                <input type="checkbox" id="ignoreTeachingConflicts" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                <span class="ml-2 text-sm text-gray-700">Ignore teaching conflicts</span>
+                            </label>
+                        </div>
+                    </div>
+                </form>
+                
+                <!-- Loading State -->
+                <div id="loadingSpinner" class="hidden text-center py-4">
+                    <div class="inline-flex items-center">
+                        <div class="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent mr-3"></div>
+                        <span class="text-gray-600">Searching...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div id="searchResults"></div>
+            
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        // Search functionality
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchForm = document.getElementById('searchForm');
+            const courseInput = document.getElementById('courseInput');
+            
+            searchForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                searchCourse();
+            });
+            
+            // Search on Enter key
+            courseInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    searchCourse();
+                }
+            });
+        });
+
+        async function searchCourse() {
+            const courseInput = document.getElementById('courseInput');
+            const loadingSpinner = document.getElementById('loadingSpinner');
+            const searchResults = document.getElementById('searchResults');
+            
+            const courseName = courseInput.value.trim();
+            if (!courseName) {
+                showNotification('Please enter a course name');
+                return;
+            }
+
+            // Show loading state
+            loadingSpinner.classList.remove('hidden');
+            searchResults.innerHTML = '';
+            
+            try {
+                const formData = new FormData();
+                formData.append('course_name', courseName);
+                
+                // Check if advanced options are enabled
+                const ignoreBusySlots = document.getElementById('ignoreBusySlots').checked;
+                const ignoreTeachingConflicts = document.getElementById('ignoreTeachingConflicts').checked;
+                
+                let endpoint = '/search-course';
+                
+                // Use advanced endpoint if any constraint options are enabled
+                if (ignoreBusySlots || ignoreTeachingConflicts) {
+                    endpoint = '/search-course-advanced';
+                    formData.append('ignore_busy_slots', ignoreBusySlots);
+                    formData.append('ignore_teaching_conflicts', ignoreTeachingConflicts);
+                }
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    displaySearchResults(data.results);
+                } else {
+                    showErrorMessage(data.error || 'Course not found');
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                showErrorMessage('An error occurred while searching. Please try again.');
+            } finally {
+                loadingSpinner.classList.add('hidden');
+            }
+        }
+
+        function displaySearchResults(results) {
+            const container = document.getElementById('searchResults');
+            
+            if (!results.found) {
+                container.innerHTML = `
+                    <div class="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                        <div class="flex items-center">
+                            <span class="material-icons text-yellow-600 mr-2">search_off</span>
+                            <div>
+                                <h3 class="font-medium text-yellow-800">No Results Found</h3>
+                                <p class="text-yellow-700 text-sm">${results.message}</p>
+                                ${results.suggestions && results.suggestions.length > 0 ? 
+                                    '<p class="text-yellow-700 text-sm mt-1"><strong>Suggestions:</strong> ' + results.suggestions.join(', ') + '</p>' : ''}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = `
+                <div class="bg-white rounded-lg shadow mb-6">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <h2 class="text-lg font-semibold text-gray-900">
+                            Search Results: ${results.total_matches} course(s) found
+                        </h2>
+            `;
+            
+            // Add constraint settings indicator if present
+            if (results.constraint_settings) {
+                const settings = results.constraint_settings;
+                const activeConstraints = [];
+                
+                if (settings.ignore_busy_slots) {
+                    activeConstraints.push('Ignoring professor busy slots');
+                }
+                if (settings.ignore_teaching_conflicts) {
+                    activeConstraints.push('Ignoring teaching conflicts');
+                }
+                
+                if (activeConstraints.length > 0) {
+                    html += `
+                        <div class="mt-2 inline-flex items-center px-3 py-1 bg-blue-100 text-blue-800 text-sm rounded-md">
+                            <span class="material-icons text-sm mr-1">tune</span>
+                            ${activeConstraints.join(', ')}
+                        </div>
+                    `;
+                }
+            }
+            
+            html += `</div>`;
+
+            // Generate course results
+            for (const [courseId, info] of Object.entries(results.courses)) {
+                html += generateCourseTable(courseId, info);
+            }
+
+            html += `</div>`;
+            container.innerHTML = html;
+        }
+
+        function generateCourseTable(courseId, info) {
+            // Safety checks for undefined properties
+            if (!info) {
+                return `<div class="px-6 py-4 text-red-500">Error: No data for course ${courseId}</div>`;
+            }
+            
+            const hasConflicts = info.has_conflicts || false;
+            const conflictedStudents = info.total_conflicted_students || 0;
+            const enrolledStudents = info.total_enrolled_students || 0;
+            
+            const conflictBadge = hasConflicts ? 
+                `<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                    <span class="material-icons text-xs mr-1">warning</span>
+                    ${conflictedStudents} conflicts
+                </span>` :
+                `<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    <span class="material-icons text-xs mr-1">check_circle</span>
+                    No conflicts
+                </span>`;
+
+            let html = `
+                <div class="px-6 py-4">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-medium text-gray-900">${courseId}</h3>
+                        ${conflictBadge}
+                    </div>
+                    
+                    <!-- Current Schedule -->
+                    <div class="mb-6">
+                        <h4 class="text-sm font-medium text-gray-700 mb-2">Current Schedule</h4>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Slot</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Students</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Conflicts</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+            `;
+
+            // Current schedule rows
+            if (info.scheduled_slots && Array.isArray(info.scheduled_slots)) {
+                info.scheduled_slots.forEach(timeSlot => {
+                    // Get conflict count from current_slot_analysis
+                    const slotAnalysis = info.current_slot_analysis && info.current_slot_analysis[timeSlot];
+                    const conflictCount = slotAnalysis ? slotAnalysis.total_conflicts : 0;
+                    const conflictClass = conflictCount > 5 ? 'conflict-high' : 
+                                        conflictCount > 0 ? 'conflict-medium' : 'conflict-low';
+                
+                html += `
+                    <tr class="table-row ${conflictClass}">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${timeSlot}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${enrolledStudents}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${conflictCount > 0 ? 
+                                `<span class="text-red-600 font-medium">${conflictCount} conflicts</span>` : 
+                                '<span class="text-green-600">No conflicts</span>'
+                            }
+                        </td>
+                    </tr>
+                `;
+                });
+            } else {
+                // If no scheduled times, show message
+                html += `
+                    <tr>
+                        <td colspan="3" class="px-6 py-4 text-center text-sm text-gray-500">No scheduled times found</td>
+                    </tr>
+                `;
+            }
+
+            html += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+            `;
+
+            // Alternative slots analysis
+            if (info.alternative_slot_analysis && Object.keys(info.alternative_slot_analysis).length > 0) {
+                html += `
+                    <div class="mb-6">
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Slot</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Conflicts</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Professor Available</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Recommendation</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                `;
+
+                // Sort alternatives by conflict count
+                const sortedAlternatives = Object.entries(info.alternative_slot_analysis)
+                    .sort(([,a], [,b]) => a.potential_conflicts - b.potential_conflicts);
+
+                sortedAlternatives.forEach(([timeSlot, analysis]) => {
+                    const conflictCount = analysis.potential_conflicts || 0;
+                    const profAvailable = analysis.professor_available !== false; // default to true if undefined
+                    const isRecommended = analysis.would_be_conflict_free || false;
+                    
+                    const rowClass = !profAvailable ? 'conflict-high' :
+                                   conflictCount > 5 ? 'conflict-medium' :
+                                   conflictCount > 0 ? 'conflict-low' : 'available';
+                    
+                    const recommendation = !profAvailable ? 
+                        '<span class="text-red-600 font-medium">Professor Unavailable</span>' :
+                        isRecommended ? 
+                        '<span class="text-green-600 font-medium">Recommended</span>' :
+                        '<span class="text-yellow-600">Has Conflicts</span>';
+
+                    // Generate tooltip content for conflicts
+                    let tooltipContent = '';
+                    
+                    if (analysis.conflict_details && analysis.conflict_details.length > 0) {
+                        tooltipContent = `
+                            <div class="text-sm font-semibold mb-2">${conflictCount} Student Conflicts:</div>
+                            ${analysis.conflict_details.map(conflict => {
+                                // Use the new conflicting_courses_with_types if available, otherwise fall back to original
+                                const coursesWithTypes = conflict.conflicting_courses_with_types || 
+                                    (conflict.conflicting_courses || []).map(course => ({
+                                        course_name: course,
+                                        course_type: 'Unknown'
+                                    }));
+                                
+                                return coursesWithTypes.map(courseInfo => `
+                                    <div class="conflict-item">
+                                        <div class="font-medium text-blue-200">${conflict.student_id || 'Unknown Student'}</div>
+                                        <div class="text-xs text-gray-300">
+                                            Conflicts with: <span class="text-red-300 font-medium">${courseInfo.course_name}</span>
+                                            <span class="text-yellow-300">(${courseInfo.course_type})</span>
+                                        </div>
+                                    </div>
+                                `).join('');
+                            }).join('')}
+                        `;
+                    } else {
+                        tooltipContent = '<div class="text-sm">No conflicts would occur in this time slot</div>';
+                    }
+
+                    html += `
+                        <tr class="table-row tooltip-row ${rowClass} tooltip-container" 
+                            onmouseenter="showTooltip(event, 'tooltip-${timeSlot.replace(/[^a-zA-Z0-9]/g, '_')}')" 
+                            onmouseleave="hideTooltip('tooltip-${timeSlot.replace(/[^a-zA-Z0-9]/g, '_')}')"
+                            onmousemove="moveTooltip(event, 'tooltip-${timeSlot.replace(/[^a-zA-Z0-9]/g, '_')}')">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${timeSlot}</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                ${conflictCount > 0 ? 
+                                    `<span class="text-red-600">${conflictCount} conflicts</span>` : 
+                                    '<span class="text-green-600">No conflicts</span>'
+                                }
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                ${profAvailable ? 
+                                    '<span class="text-green-600">Yes</span>' : 
+                                    '<span class="text-red-600">No</span>'
+                                }
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">${recommendation}</td>
+                            <div class="tooltip" id="tooltip-${timeSlot.replace(/[^a-zA-Z0-9]/g, '_')}">
+                                <div class="text-sm font-semibold mb-2">Conflicts for ${timeSlot}:</div>
+                                ${tooltipContent}
+                            </div>
+                        </tr>
+                    `;
+                });
+
+                html += `
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+            }
+
+                        html += `</div>`;
+            return html;
+        }
+
+        function showErrorMessage(message) {
+            const container = document.getElementById('searchResults');
+            container.innerHTML = `
+                <div class="bg-red-50 border border-red-200 rounded-md p-4">
+                    <div class="flex items-center">
+                        <span class="material-icons text-red-600 mr-2">error</span>
+                        <div>
+                            <h3 class="font-medium text-red-800">Search Error</h3>
+                            <p class="text-red-700 text-sm">${message}</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function showNotification(message) {
+            // Simple alert for now - can be enhanced with better notifications
+            alert(message);
+        }
+
+        // Tooltip functions
+        function showTooltip(event, tooltipId) {
+            const tooltip = document.getElementById(tooltipId);
+            if (tooltip) {
+                tooltip.classList.add('show');
+                positionTooltip(event, tooltip);
+            }
+        }
+
+        function hideTooltip(tooltipId) {
+            const tooltip = document.getElementById(tooltipId);
+            if (tooltip) {
+                tooltip.classList.remove('show');
+            }
+        }
+
+        function moveTooltip(event, tooltipId) {
+            const tooltip = document.getElementById(tooltipId);
+            if (tooltip && tooltip.classList.contains('show')) {
+                positionTooltip(event, tooltip);
+            }
+        }
+
+        function positionTooltip(event, tooltip) {
+            const mouseX = event.clientX;
+            const mouseY = event.clientY;
+            const tooltipRect = tooltip.getBoundingClientRect();
+            const windowWidth = window.innerWidth;
+            const windowHeight = window.innerHeight;
+
+            // Position tooltip to the right of cursor by default
+            let left = mouseX + 15;
+            let top = mouseY - 10;
+
+            // Adjust if tooltip would go off right edge of screen
+            if (left + tooltipRect.width > windowWidth) {
+                left = mouseX - tooltipRect.width - 15;
+            }
+
+            // Adjust if tooltip would go off bottom edge of screen
+            if (top + tooltipRect.height > windowHeight) {
+                top = mouseY - tooltipRect.height + 10;
+            }
+
+            // Ensure tooltip doesn't go off left edge
+            if (left < 10) {
+                left = 10;
+            }
+
+            // Ensure tooltip doesn't go off top edge
+            if (top < 10) {
+                top = 10;
+            }
+
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+        }
+    </script>
+</body>
+</html>

@@ -8,6 +8,46 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def get_course_type_mapping(db_path):
+    """
+    Get course type mapping from the database.
+    
+    :param db_path: Path to the database file or schema identifier
+    :return: Dictionary mapping course names to course types
+    """
+    # Auto-detect org_name from db_path if it's a schema path
+    org_name = None
+    if db_path and db_path.startswith("schema:"):
+        schema_name = db_path.replace("schema:", "")
+        if schema_name.startswith("org_"):
+            org_name = schema_name[4:]  # Remove 'org_' prefix
+
+    # Determine which session to use
+    if is_postgresql() and org_name:
+        session_context = get_db_session(get_organization_database_url(), org_name)
+    else:
+        session_context = get_db_session(db_path)
+
+    with session_context as session:
+        try:
+            # Query to get course name to course type mapping
+            query = session.query(
+                Course.CourseName,
+                Course.CourseType
+            ).all()
+            
+            # Convert to dictionary
+            course_type_map = {}
+            for course_name, course_type in query:
+                course_type_map[course_name] = course_type or 'Unknown'
+            
+            logger.info(f"Retrieved course type mapping for {len(course_type_map)} courses")
+            return course_type_map
+            
+        except SQLAlchemyError as e:
+            logger.error(f"Error fetching course type mapping: {e}")
+            return {}
+
 def registration_data(db_path):
     """
     Fetch registration data (student enrollments) using SQLAlchemy.

@@ -1,22 +1,28 @@
+# Standard library imports
+import asyncio
+import json
+import logging
 import os
+import time
+import uuid
+from collections import defaultdict
+from io import BytesIO
+from typing import List, Optional
+
+# Third-party imports
+import httpx
+import openai
+import pandas as pd
+import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, UploadFile, File, HTTPException, status, Depends, Form, Body
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
+from openai import OpenAI
+from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware.sessions import SessionMiddleware
 from starlette.staticfiles import StaticFiles
-from dotenv import load_dotenv
-import httpx
-import pandas as pd
-from io import BytesIO
-import uvicorn
-import json
-from typing import Optional
-import logging
-import pandas as pd
-import asyncio
-import uuid
-import time
 
 # NOTE: For deployment platforms (Heroku, Railway, etc.), ensure that:
 # 1. Request timeout is set to at least 30 minutes (1800 seconds)
@@ -24,84 +30,81 @@ import time
 # 3. Load balancer timeout is configured for long-running requests
 # The timetable generation algorithm can take 10-20 minutes for complex datasets
 
-import openai
-from openai import OpenAI
+# Local imports
+from create_database_tables import init_meta_database
+from src.course_search import CourseConflictSearcher, search_course_interactive, get_course_list, generate_course_summary_report
+from src.data_preprocessing import create_course_professor_map_all, prepare_student_course_map
+from src.main_algorithm import gen_timetable_auto
+from src.utilities import faculty_busy_slots
+
+# Database management imports
+from src.database_management.admin_manager import (
+    add_admin_user,
+    can_remove_admin,
+    ensure_first_admin,
+    get_admin_count,
+    get_all_admins,
+    is_user_admin,
+    remove_admin_user
+)
+from src.database_management.busy_slot import insert_professor_busy_slots, insert_professor_busy_slots_from_ui, fetch_user_id
+from src.database_management.Courses import insert_courses_professors
+from src.database_management.course_stud import (
+    get_section_mapping_dataframe,
+    insert_course_students,
+    print_section_summary
+)
+from src.database_management.database_retrieval import faculty_pref
+from src.database_management.dbconnection import (
+    create_tables,
+    get_db_session,
+    get_organization_by_domain,
+    get_organization_by_name
+)
+from src.database_management.models import Schedule, User
+from src.database_management.organization_manager import (
+    check_domain_availability,
+    create_organization_with_validation,
+    delete_organization,
+    get_user_organization,
+    should_redirect_to_registration,
+    validate_organization_creation
+)
+from src.database_management.schedule import (
+    fetch_schedule_data,
+    generate_csv,
+    generate_csv_for_student,
+    get_student_schedule,
+    timetable_made,
+    update_course_slot
+)
+from src.database_management.section_allocation import (
+    export_section_mapping_to_csv,
+    get_section_allocation_summary
+)
+from src.database_management.settings_manager import (
+    get_all_settings,
+    get_max_classes_per_slot,
+    initialize_default_settings,
+    set_max_classes_per_slot
+)
+from src.database_management.Slot_info import ensure_default_time_slots, fetch_slots, insert_time_slots
+from src.database_management.truncate_db import truncate_detail
+from src.database_management.Users import add_admin, fetch_admin_emails, fetch_professor_emails, fetch_user_data, insert_user_data
 
 # Global dictionary to track background tasks
 BACKGROUND_TASKS = {}
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-from collections import defaultdict
-from typing import List
-
-# -------------------- Importing your local modules --------------------
-from create_database_tables import init_meta_database
-from src.database_management.Users import insert_user_data, add_admin, fetch_user_data,fetch_professor_emails, fetch_admin_emails
-from src.database_management.Courses import insert_courses_professors
-from src.database_management.busy_slot import insert_professor_busy_slots, insert_professor_busy_slots_from_ui,fetch_user_id
-from src.database_management.course_stud import insert_course_students
-from src.database_management.Slot_info import fetch_slots, ensure_default_time_slots
-from src.database_management.schedule import (
-    timetable_made,
-    fetch_schedule_data,
-    generate_csv,
-    get_student_schedule,
-    generate_csv_for_student,
-    update_course_slot
-)
-from src.database_management.course_stud import (
-    get_section_mapping_dataframe,
-    print_section_summary
-)
-from src.database_management.section_allocation import (
-    get_section_allocation_summary,
-    export_section_mapping_to_csv
-)
-
-from src.database_management.Slot_info import insert_time_slots
-from src.database_management.truncate_db import truncate_detail
-from src.database_management.models import Schedule
-from src.main_algorithm import gen_timetable_auto
-from src.database_management.dbconnection import (
-    get_organization_by_domain, 
-    get_organization_by_name, 
-    get_db_session,
-    create_tables
-)
-from src.database_management.models import User
-from src.database_management.admin_manager import (
-    add_admin_user,
-    remove_admin_user,
-    get_all_admins,
-    is_user_admin,
-    ensure_first_admin,
-    get_admin_count,
-    can_remove_admin
-)
-from src.database_management.settings_manager import (
-    get_max_classes_per_slot,
-    set_max_classes_per_slot,
-    initialize_default_settings,
-    get_all_settings
-)
-from src.database_management.organization_manager import (
-    validate_organization_creation,
-    get_user_organization,
-    should_redirect_to_registration,
-    create_organization_with_validation,
-    check_domain_availability, 
-    delete_organization
-
-)
-from sqlalchemy import text
 
 load_dotenv()
 print(os.getenv("DATABASE_URL"))
 client_id = os.getenv("CLIENT_ID")
 client_secret = os.getenv("CLIENT_SECRET")
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Commented out for now - only needed for AI features
+# client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 
 app = FastAPI()
@@ -127,7 +130,8 @@ async def startup_event():
                 logger.info("SQLite meta-database already exists, skipping initialization")
                 
         # Start background task cleanup
-        asyncio.create_task(periodic_cleanup())
+        # Commented out for now as periodic_cleanup is defined at end of file
+        # asyncio.create_task(periodic_cleanup())
         logger.info("Started background task cleanup service")
         
     except Exception as e:
@@ -1303,6 +1307,274 @@ async def testing(request: Request):
     return templates.TemplateResponse("test.html", {"request": request})
 
 
+@app.get("/course-search", response_class=HTMLResponse)
+async def course_search_page(request: Request):
+    """
+    Display the course search page.
+    """
+    if not is_admin(request):
+        raise HTTPException(status_code=403, detail="Access forbidden: Admins only.")
+    
+    db_path = request.session.get("db_path")
+    if not db_path:
+        raise HTTPException(status_code=400, detail="Database path not found in session")
+    
+    # Check if timetable exists
+    try:
+        schedule_data_raw = fetch_schedule_data(db_path)
+        if not schedule_data_raw:  # Check if list is empty
+            return templates.TemplateResponse("course_search.html", {
+                "request": request,
+                "no_timetable": True,
+                "message": "No timetable has been generated yet. Please generate a timetable first."
+            })
+        
+        # Convert to DataFrame format expected by course search
+        schedule_records = []
+        for day, start_time, end_time, courses_str in schedule_data_raw:
+            # Parse multiple courses in the same slot
+            courses = [course.strip() for course in courses_str.split(',')]
+            for course in courses:
+                schedule_records.append({
+                    "Course ID": course,
+                    "Scheduled Time": f"{day} {start_time}"
+                })
+        
+        schedule_df = pd.DataFrame(schedule_records)
+        
+        # Get available courses
+        available_courses = get_course_list(schedule_df)
+        
+        return templates.TemplateResponse("course_search.html", {
+            "request": request,
+            "courses": available_courses,
+            "total_courses": len(available_courses)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error loading course search page: {e}")
+        return templates.TemplateResponse("course_search.html", {
+            "request": request,
+            "error": True,
+            "message": f"Error loading course data: {str(e)}"
+        })
+
+
+@app.post("/search-course")
+async def search_course(request: Request, course_name: str = Form(...)):
+    """
+    Search for a specific course and return conflict information.
+    """
+    if not is_admin(request):
+        raise HTTPException(status_code=403, detail="Access forbidden: Admins only.")
+    
+    db_path = request.session.get("db_path")
+    if not db_path:
+        raise HTTPException(status_code=400, detail="Database path not found in session")
+    
+    try:
+        # Get schedule data
+        from src.data_preprocessing import prepare_student_course_map
+        from src.database_management.database_retrieval import registration_data
+        
+        schedule_data_raw = fetch_schedule_data(db_path)
+        if not schedule_data_raw:  # Check if list is empty
+            return JSONResponse({
+                "success": False,
+                "error": "No timetable data available. Please generate a timetable first."
+            })
+        
+        # Convert to DataFrame format expected by course search
+        schedule_records = []
+        for day, start_time, end_time, courses_str in schedule_data_raw:
+            # Parse multiple courses in the same slot
+            courses = [course.strip() for course in courses_str.split(',')]
+            for course in courses:
+                schedule_records.append({
+                    "Course ID": course,
+                    "Scheduled Time": f"{day} {start_time}"
+                })
+        
+        schedule_df = pd.DataFrame(schedule_records)
+        
+        # Get student course mapping
+        df_merged = registration_data(db_path)
+        student_course_map = prepare_student_course_map(df_merged)
+        
+        # Get course type mapping
+        from src.database_management.database_retrieval import get_course_type_mapping
+        course_type_map = get_course_type_mapping(db_path)
+        
+        # Get professor data for constraint checking
+        try:
+            course_professor_map = create_course_professor_map_all(df_merged)
+            df_faculty_pref = faculty_pref(db_path)
+            professor_busy_slots = faculty_busy_slots(df_faculty_pref)
+        except Exception as e:
+            logger.warning(f"Could not load professor data: {e}")
+            course_professor_map = {}
+            professor_busy_slots = {}
+        
+        # Perform course search with professor constraints and course types
+        searcher = CourseConflictSearcher(schedule_df, student_course_map, 
+                                        course_professor_map, professor_busy_slots, course_type_map)
+        results = searcher.search_course(course_name)
+        
+        return JSONResponse({
+            "success": True,
+            "results": results
+        })
+        
+    except Exception as e:
+        logger.error(f"Error searching for course {course_name}: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": f"Error searching for course: {str(e)}"
+        })
+
+
+@app.post("/search-course-advanced")
+async def search_course_advanced(request: Request, 
+                                course_name: str = Form(...),
+                                ignore_busy_slots: bool = Form(False),
+                                ignore_teaching_conflicts: bool = Form(False)):
+    """
+    Advanced course search with options to ignore professor constraints.
+    """
+    if not is_admin(request):
+        raise HTTPException(status_code=403, detail="Access forbidden: Admins only.")
+    
+    db_path = request.session.get("db_path")
+    if not db_path:
+        raise HTTPException(status_code=400, detail="Database path not found in session")
+    
+    try:
+        # Get schedule data
+        from src.data_preprocessing import prepare_student_course_map
+        from src.database_management.database_retrieval import registration_data, get_course_type_mapping
+        
+        schedule_data_raw = fetch_schedule_data(db_path)
+        if not schedule_data_raw:  # Check if list is empty
+            return JSONResponse({
+                "success": False,
+                "error": "No timetable data available. Please generate a timetable first."
+            })
+        
+        # Convert to DataFrame format expected by course search
+        schedule_records = []
+        for day, start_time, end_time, courses_str in schedule_data_raw:
+            # Parse multiple courses in the same slot
+            courses = [course.strip() for course in courses_str.split(',')]
+            for course in courses:
+                schedule_records.append({
+                    "Course ID": course,
+                    "Scheduled Time": f"{day} {start_time}"
+                })
+        
+        schedule_df = pd.DataFrame(schedule_records)
+        
+        # Get student course mapping
+        df_merged = registration_data(db_path)
+        student_course_map = prepare_student_course_map(df_merged)
+        
+        # Get course type mapping
+        course_type_map = get_course_type_mapping(db_path)
+        
+        # Get professor data for constraint checking
+        try:
+            course_professor_map = create_course_professor_map_all(df_merged)
+            df_faculty_pref = faculty_pref(db_path)
+            professor_busy_slots = faculty_busy_slots(df_faculty_pref)
+        except Exception as e:
+            logger.warning(f"Could not load professor data: {e}")
+            course_professor_map = {}
+            professor_busy_slots = {}
+        
+        # Perform course search with configurable professor constraints
+        searcher = CourseConflictSearcher(
+            schedule_df, student_course_map, 
+            course_professor_map, professor_busy_slots, course_type_map,
+            ignore_professor_busy_slots=ignore_busy_slots,
+            ignore_professor_teaching_conflicts=ignore_teaching_conflicts
+        )
+        results = searcher.search_course(course_name)
+        
+        # Add constraint settings to results
+        results['constraint_settings'] = {
+            'ignore_busy_slots': ignore_busy_slots,
+            'ignore_teaching_conflicts': ignore_teaching_conflicts
+        }
+        
+        return JSONResponse({
+            "success": True,
+            "results": results
+        })
+        
+    except Exception as e:
+        logger.error(f"Error searching for course {course_name}: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": f"Error searching for course: {str(e)}"
+        })
+
+
+@app.get("/course-summary")
+async def get_course_summary(request: Request):
+    """
+    Get a summary table of all courses with conflict information.
+    """
+    if not is_admin(request):
+        raise HTTPException(status_code=403, detail="Access forbidden: Admins only.")
+    
+    db_path = request.session.get("db_path")
+    if not db_path:
+        raise HTTPException(status_code=400, detail="Database path not found in session")
+    
+    try:
+        # Get schedule data
+        from src.data_preprocessing import prepare_student_course_map
+        from src.database_management.database_retrieval import registration_data
+        
+        schedule_data_raw = fetch_schedule_data(db_path)
+        if not schedule_data_raw:  # Check if list is empty
+            return JSONResponse({
+                "success": False,
+                "error": "No timetable data available."
+            })
+        
+        # Convert to DataFrame format expected by course search
+        schedule_records = []
+        for day, start_time, end_time, courses_str in schedule_data_raw:
+            # Parse multiple courses in the same slot
+            courses = [course.strip() for course in courses_str.split(',')]
+            for course in courses:
+                schedule_records.append({
+                    "Course ID": course,
+                    "Scheduled Time": f"{day} {start_time}"
+                })
+        
+        schedule_df = pd.DataFrame(schedule_records)
+        
+        # Get student course mapping
+        df_merged = registration_data(db_path)
+        student_course_map = prepare_student_course_map(df_merged)
+        
+        # Generate summary report
+        summary_df = generate_course_summary_report(schedule_df, student_course_map)
+        
+        return JSONResponse({
+            "success": True,
+            "summary": summary_df.to_dict(orient="records")
+        })
+        
+    except Exception as e:
+        logger.error(f"Error generating course summary: {e}")
+        return JSONResponse({
+            "success": False,
+            "error": f"Error generating summary: {str(e)}"
+        })
+
+
 def _build_schedule_summary(schedule: list) -> str:
     """Helper to format schedule tuples for the chat assistant."""
     lines = [f"{d} {s}-{e}: {c}" for d, s, e, c in schedule]
@@ -1351,12 +1623,14 @@ async def chat_assistant_api(request: Request, message: str = Body(..., embed=Tr
         {"role": "user", "content": message},
     ]
     try:
-        resp = await run_in_threadpool(
-            client.chat.completions.create,
-            model="gpt-4o",
-            messages=prompt,
-            temperature=0.7,)
-        answer = resp.choices[0].message.content.strip()
+        # Commented out for now - OpenAI integration temporarily disabled
+        # resp = await run_in_threadpool(
+        #     client.chat.completions.create,
+        #     model="gpt-4o",
+        #     messages=prompt,
+        #     temperature=0.7,)
+        # answer = resp.choices[0].message.content.strip()
+        answer = "Chat assistant is temporarily unavailable. Please use the course search feature instead."
     except Exception as e:
         logger.exception("LLM call failed")
         raise HTTPException(status_code=500, detail=f"Chat assistant error: {e}")
